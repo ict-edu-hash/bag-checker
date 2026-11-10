@@ -30,8 +30,10 @@
 
     .camera-container { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: 16px; overflow: hidden; margin-bottom: 12px; }
     video { width: 100%; height: 100%; object-fit: cover; }
-    .scan-guide { position: absolute; top: 15%; left: 15%; width: 70%; height: 70%; border: 3px dashed rgba(255,255,255,0.7); border-radius: 12px; pointer-events: none; }
-    .scan-guide::after { content: "きょうかしょのもじをあわせてね"; position: absolute; bottom: 8px; left: 0; width: 100%; text-align: center; color: #fff; font-size: 0.8rem; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
+    
+    /* ガイド枠（ここに入った文字だけを切り取って判定します） */
+    .scan-guide { position: absolute; top: 20%; left: 15%; width: 70%; height: 60%; border: 3px dashed rgba(255,255,255,0.85); border-radius: 12px; pointer-events: none; }
+    .scan-guide::after { content: "ここにきょうかしょのもじをあわせてね"; position: absolute; bottom: 8px; left: 0; width: 100%; text-align: center; color: #fff; font-size: 0.85rem; font-weight: bold; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
 
     .result-box { min-height: 54px; font-size: 1.1rem; font-weight: bold; margin-bottom: 12px; display: flex; align-items: center; justify-content: center; }
     .btn-scan { width: 100%; padding: 14px; border-radius: 30px; border: none; font-size: 1.2rem; font-weight: bold; background: var(--primary); color: #fff; box-shadow: 0 6px 16px rgba(76,175,80,0.3); cursor: pointer; }
@@ -78,13 +80,14 @@
   </div>
 
 <script>
+  // 表記ゆれ辞書（大日本図書の「楽しい理科」などの付帯文字や誤認識文字もカバー）
   const SUBJECT_MAP = {
-    "こくご": ["国語", "こくご", "コクゴ"],
-    "さんすう": ["算数", "さんすう", "サンスウ", "計算"],
-    "りか": ["理科", "りか", "リカ"],
-    "しゃかい": ["社会", "しゃかい", "シャカイ"],
-    "えいご": ["英語", "えいご", "エイゴ", "English"],
-    "おんがく": ["音楽", "おんがく"],
+    "こくご": ["国語", "こくご", "コクゴ", "国"],
+    "さんすう": ["算数", "さんすう", "サンスウ", "計算", "算"],
+    "りか": ["理科", "りか", "リカ", "理"],
+    "しゃかい": ["社会", "しゃかい", "シャカイ", "社"],
+    "えいご": ["英語", "えいご", "エイゴ", "English", "BLUE SKY", "Here We Go"],
+    "おんがく": ["音楽", "おんがく", "音"],
     "ずこう": ["図画工作", "図工", "ずこう"],
     "たいいく": ["体育", "たいいく", "ほけん"],
     "どうとく": ["道徳", "どうとく"],
@@ -129,19 +132,27 @@
     });
   }
 
-  // インカメラ起動設定
+  // インカメラ（前面）を優先起動
   async function initCamera() {
+    const video = document.getElementById("webcam");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" }, // ★インカメラ（前面）を指定
+        video: { facingMode: "user" },
         audio: false
       });
-      document.getElementById("webcam").srcObject = stream;
+      video.srcObject = stream;
     } catch (e) {
-      alert("カメラのきょかがひつようです: " + e.message);
+      try {
+        // フォールバック
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        video.srcObject = stream;
+      } catch (err) {
+        alert("カメラのきょかがひつようです: " + err.message);
+      }
     }
   }
 
+  // OCR処理（枠内トリミング ＋ 白黒二値化で精度向上）
   async function readCover() {
     const btn = document.getElementById("scanBtn");
     const msg = document.getElementById("resultMessage");
@@ -151,17 +162,37 @@
     btn.disabled = true;
     msg.textContent = "🔍 もじをよみとっているよ...";
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // 枠内のエリア（top:20%, left:15%, width:70%, height:60%）だけを切り取る
+    const cropX = video.videoWidth * 0.15;
+    const cropY = video.videoHeight * 0.20;
+    const cropW = video.videoWidth * 0.70;
+    const cropH = video.videoHeight * 0.60;
+
+    canvas.width = cropW;
+    canvas.height = cropH;
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+    // 文字の輪郭をくっきりさせる前処理（グレースケール＋コントラスト強調）
+    const imgData = ctx.getImageData(0, 0, cropW, cropH);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const v = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      const binary = v > 130 ? 255 : 0; // しきい値
+      d[i] = binary;
+      d[i+1] = binary;
+      d[i+2] = binary;
+    }
+    ctx.putImageData(imgData, 0, 0);
 
     try {
       const { data: { text } } = await Tesseract.recognize(canvas, 'jpn', {
         logger: m => {} 
       });
 
-      const detected = matchSubject(text);
+      // 空白や改行を除去
+      const cleanedText = text.replace(/\s+/g, '');
+      const detected = matchSubject(cleanedText);
       judgeSubject(detected);
     } catch (err) {
       msg.textContent = "もういちどためしてね！";
