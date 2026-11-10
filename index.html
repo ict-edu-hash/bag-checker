@@ -129,10 +129,11 @@
     });
   }
 
+  // インカメラ起動設定
   async function initCamera() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: { facingMode: "user" }, // ★インカメラ（前面）を指定
         audio: false
       });
       document.getElementById("webcam").srcObject = stream;
