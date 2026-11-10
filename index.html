@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>あしたのしたくサポーター</title>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <style>
+    :root {
+      --primary: #4CAF50;
+      --accent: #FF9800;
+      --bg: #F5F7FB;
+      --card: #FFFFFF;
+      --text: #333333;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: "Hiragino Maru Gothic ProN", "Yu Gothic", sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 12px; max-width: 600px; margin: 0 auto; text-align: center; }
+
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    h1 { font-size: 1.3rem; color: #2E7D32; }
+    button.btn-gear { background: none; border: none; font-size: 1.5rem; cursor: pointer; }
+
+    .schedule-card { background: var(--card); border-radius: 16px; padding: 12px; margin-bottom: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.06); }
+    .target-day { font-size: 1.1rem; font-weight: bold; color: var(--accent); margin-bottom: 8px; }
+    .book-tags { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+    .book-tag { padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.95rem; border: 2px solid #ddd; background: #fafafa; color: #777; transition: all 0.3s; }
+    .book-tag.checked { background: #E8F5E9; border-color: #4CAF50; color: #2E7D32; }
+    .book-tag.checked::before { content: "✔ "; }
+
+    .camera-container { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: 16px; overflow: hidden; margin-bottom: 12px; }
+    video { width: 100%; height: 100%; object-fit: cover; }
+    .scan-guide { position: absolute; top: 15%; left: 15%; width: 70%; height: 70%; border: 3px dashed rgba(255,255,255,0.7); border-radius: 12px; pointer-events: none; }
+    .scan-guide::after { content: "きょうかしょのもじをあわせてね"; position: absolute; bottom: 8px; left: 0; width: 100%; text-align: center; color: #fff; font-size: 0.8rem; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
+
+    .result-box { min-height: 54px; font-size: 1.1rem; font-weight: bold; margin-bottom: 12px; display: flex; align-items: center; justify-content: center; }
+    .btn-scan { width: 100%; padding: 14px; border-radius: 30px; border: none; font-size: 1.2rem; font-weight: bold; background: var(--primary); color: #fff; box-shadow: 0 6px 16px rgba(76,175,80,0.3); cursor: pointer; }
+    .btn-scan:disabled { background: #BDBDBD; box-shadow: none; }
+
+    .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; padding: 16px; }
+    .modal.active { display: flex; }
+    .modal-content { background: #fff; border-radius: 16px; padding: 16px; max-height: 85vh; width: 100%; overflow-y: auto; text-align: left; }
+    .modal-content h2 { font-size: 1.1rem; margin-bottom: 12px; text-align: center; }
+    .day-setting { margin-bottom: 12px; }
+    .day-setting label { font-weight: bold; display: block; margin-bottom: 4px; font-size: 0.9rem; }
+    .day-setting input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 8px; font-size: 0.9rem; }
+    .btn-close { width: 100%; padding: 10px; margin-top: 8px; background: #333; color: #fff; border: none; border-radius: 8px; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>🎒 あしたのしたく</h1>
+    <button class="btn-gear" onclick="openSetting()">⚙️</button>
+  </header>
+
+  <div class="schedule-card">
+    <div class="target-day" id="targetDayLabel">あしたのきょうかしょ</div>
+    <div class="book-tags" id="bookTagList"></div>
+  </div>
+
+  <div class="camera-container">
+    <video id="webcam" autoplay playsinline muted></video>
+    <div class="scan-guide"></div>
+    <canvas id="captureCanvas" style="display:none;"></canvas>
+  </div>
+
+  <div class="result-box" id="resultMessage">したのボタンをおしてね！</div>
+  <button class="btn-scan" id="scanBtn" onclick="readCover()">📸 きょうかしょをチェック！</button>
+
+  <div class="modal" id="settingModal">
+    <div class="modal-content">
+      <h2>⚙️ 1しゅうかんのじかんわり</h2>
+      <p style="font-size:0.8rem; color:#666; margin-bottom:12px;">※ 教科名をカンマ（,）区切りで入力してね</p>
+      <div id="scheduleInputs"></div>
+      <button class="btn-close" onclick="saveSetting()">ほぞんしてとじる</button>
+    </div>
+  </div>
+
+<script>
+  const SUBJECT_MAP = {
+    "こくご": ["国語", "こくご", "コクゴ"],
+    "さんすう": ["算数", "さんすう", "サンスウ", "計算"],
+    "りか": ["理科", "りか", "リカ"],
+    "しゃかい": ["社会", "しゃかい", "シャカイ"],
+    "えいご": ["英語", "えいご", "エイゴ", "English"],
+    "おんがく": ["音楽", "おんがく"],
+    "ずこう": ["図画工作", "図工", "ずこう"],
+    "たいいく": ["体育", "たいいく", "ほけん"],
+    "どうとく": ["道徳", "どうとく"],
+    "せいかつ": ["生活", "せいかつ"]
+  };
+
+  const DEFAULT_SCHEDULE = {
+    1: ["こくご", "さんすう", "りか", "たいいく"],
+    2: ["さんすう", "しゃかい", "おんがく", "こくご"],
+    3: ["こくご", "りか", "えいご", "ずこう"],
+    4: ["さんすう", "しゃかい", "どうとく", "たいいく"],
+    5: ["こくご", "さんすう", "せいかつ", "おんがく"]
+  };
+
+  let schedule = JSON.parse(localStorage.getItem('my_schedule')) || DEFAULT_SCHEDULE;
+  let targetSubjects = [];
+  let checkedSubjects = new Set();
+  const dayNames = ["にち", "げつ", "か", "すい", "もく", "きん", "ど"];
+
+  function initTargetDay() {
+    const today = new Date().getDay();
+    let targetDay = (today + 1) % 7;
+    if (targetDay === 0) targetDay = 1;
+    if (targetDay === 6) targetDay = 1;
+
+    const rawList = schedule[targetDay] || [];
+    targetSubjects = [...new Set(rawList)];
+    checkedSubjects.clear();
+
+    document.getElementById("targetDayLabel").textContent = `あした（${dayNames[targetDay]}ようび）のきょうかしょ`;
+    renderTags();
+  }
+
+  function renderTags() {
+    const container = document.getElementById("bookTagList");
+    container.innerHTML = "";
+    targetSubjects.forEach(sub => {
+      const tag = document.createElement("div");
+      tag.className = `book-tag ${checkedSubjects.has(sub) ? "checked" : ""}`;
+      tag.textContent = sub;
+      container.appendChild(tag);
+    });
+  }
+
+  async function initCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false
+      });
+      document.getElementById("webcam").srcObject = stream;
+    } catch (e) {
+      alert("カメラのきょかがひつようです: " + e.message);
+    }
+  }
+
+  async function readCover() {
+    const btn = document.getElementById("scanBtn");
+    const msg = document.getElementById("resultMessage");
+    const video = document.getElementById("webcam");
+    const canvas = document.getElementById("captureCanvas");
+
+    btn.disabled = true;
+    msg.textContent = "🔍 もじをよみとっているよ...";
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    try {
+      const { data: { text } } = await Tesseract.recognize(canvas, 'jpn', {
+        logger: m => {} 
+      });
+
+      const detected = matchSubject(text);
+      judgeSubject(detected);
+    } catch (err) {
+      msg.textContent = "もういちどためしてね！";
+      speak("うまくよみとれませんでした。もういちどためしてね");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function matchSubject(ocrText) {
+    for (const [key, aliases] of Object.entries(SUBJECT_MAP)) {
+      for (const word of aliases) {
+        if (ocrText.includes(word)) return key;
+      }
+    }
+    return null;
+  }
+
+  function judgeSubject(detected) {
+    const msg = document.getElementById("resultMessage");
+
+    if (!detected) {
+      msg.textContent = "きょうかしょのなまえがみつからないよ";
+      speak("きょうかしょのなまえがみつからないよ。まっすぐかざしてみてね");
+      return;
+    }
+
+    if (targetSubjects.includes(detected)) {
+      if (checkedSubjects.has(detected)) {
+        msg.textContent = `「${detected}」はもうチェックしたよ！`;
+        speak(`その${detected}はもうチェックしたよ`);
+      } else {
+        checkedSubjects.add(detected);
+        renderTags();
+
+        if (checkedSubjects.size === targetSubjects.length) {
+          msg.textContent = "🎉 ぜんぶそろったよ！えらい！";
+          speak("やったね！ぜんぶそろいました！ランドセルのしたく、かんぺき！");
+          confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+        } else {
+          msg.textContent = `⭕ 正解！「${detected}」をいれよう！`;
+          speak(`せいかい！${detected}をランドセルにいれよう！`);
+        }
+      }
+    } else {
+      msg.textContent = `❌「${detected}」はあしたつかわないよ`;
+      speak(`その${detected}は、あしたはつかわないよ`);
+    }
+  }
+
+  function speak(text) {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const uttr = new SpeechSynthesisUtterance(text);
+    uttr.lang = "ja-JP";
+    uttr.rate = 1.0;
+    window.speechSynthesis.speak(uttr);
+  }
+
+  function openSetting() {
+    const box = document.getElementById("scheduleInputs");
+    box.innerHTML = "";
+    for (let d = 1; d <= 5; d++) {
+      const div = document.createElement("div");
+      div.className = "day-setting";
+      div.innerHTML = `
+        <label>${dayNames[d]}ようび</label>
+        <input type="text" id="sch_${d}" value="${(schedule[d] || []).join(',')}">
+      `;
+      box.appendChild(div);
+    }
+    document.getElementById("settingModal").classList.add("active");
+  }
+
+  function saveSetting() {
+    for (let d = 1; d <= 5; d++) {
+      const val = document.getElementById(`sch_${d}`).value;
+      schedule[d] = val.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    localStorage.setItem('my_schedule', JSON.stringify(schedule));
+    document.getElementById("settingModal").classList.remove("active");
+    initTargetDay();
+  }
+
+  window.addEventListener("DOMContentLoaded", () => {
+    initCamera();
+    initTargetDay();
+  });
+</script>
+</body>
+</html>
